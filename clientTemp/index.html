@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat and Call Application</title>
+    <!-- Include your CSS here -->
+</head>
+<body>
+    <!-- Video elements for local and remote video -->
+    <video id="localVideo" autoplay muted></video>
+    <video id="remoteVideo" autoplay></video>
+
+    <!-- Buttons for call actions -->
+    <button id="callButton">Call</button>
+    <button id="hangupButton">Hang Up</button>
+
+    <!-- Include Socket.IO Client -->
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+
+    <!-- Include Adapter for WebRTC compatibility -->
+    <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
+
+    <script>
+        var socket = io('http://localhost:8000'); // Update with your server URL
+
+        var localVideo = document.getElementById('localVideo');
+        var remoteVideo = document.getElementById('remoteVideo');
+        var callButton = document.getElementById('callButton');
+        var hangupButton = document.getElementById('hangupButton');
+
+        // Assuming you want to call a specific user, replace 'targetSocketId' with the actual target user's socket ID
+        var targetSocketId = 'targetSocketId';
+
+        // WebRTC setup
+        var localStream;
+        var remoteStream;
+        var peerConnection;
+        const configuration = {'iceServers': [{'urls': 'stun:stun.l.google.com:19302'}]}; // Using Google's public STUN server
+
+        // Get local media stream
+        navigator.mediaDevices.getUserMedia({video: true, audio: true})
+            .then(stream => {
+                localVideo.srcObject = stream;
+                localStream = stream;
+            })
+            .catch(error => {
+                console.error('Error accessing media devices.', error);
+            });
+
+        // Call button event listener
+        callButton.onclick = () => {
+            // Start a call
+            startCall();
+        };
+
+        // Hang up button event listener
+        hangupButton.onclick = () => {
+            // End the call
+            endCall();
+        };
+
+        // Function to start a call
+        function startCall() {
+            peerConnection = new RTCPeerConnection(configuration);
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+            });
+
+            // Handle remote stream
+            peerConnection.ontrack = event => {
+                remoteStream = event.streams[0];
+                remoteVideo.srcObject = remoteStream;
+            };
+
+            // ICE Candidate handling
+            peerConnection.onicecandidate = event => {
+                if (event.candidate) {
+                    socket.emit('callUser', {
+                        userToCall: targetSocketId,
+                        signalData: event.candidate,
+                        from: socket.id
+                    });
+                }
+            };
+
+            // Create offer
+            peerConnection.createOffer()
+                .then(offer => peerConnection.setLocalDescription(offer))
+                .then(() => {
+                    socket.emit('callUser', {
+                        userToCall: targetSocketId,
+                        signalData: peerConnection.localDescription,
+                        from: socket.id
+                    });
+                });
+        }
+
+        // Function to end the call
+        function endCall() {
+            peerConnection.close();
+            remoteVideo.srcObject = null;
+            socket.emit('endCall', { to: targetSocketId });
+        }
+
+        // Listen for call events from the server
+        socket.on('callUser', data => {
+            peerConnection = new RTCPeerConnection(configuration);
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+            });
+
+            peerConnection.setRemoteDescription(new RTCSessionDescription(data.signalData));
+            peerConnection.createAnswer()
+                .then(answer => peerConnection.setLocalDescription(answer))
+                .then(() => {
+                    socket.emit('acceptCall', {
+                        signal: peerConnection.localDescription,
+                        to: data.from
+                    });
+                });
+
+            peerConnection.ontrack = event => {
+                remoteStream = event.streams[0];
+                remoteVideo.srcObject = remoteStream;
+            };
+
+            peerConnection.onicecandidate = event => {
+                if (event.candidate) {
+                    socket.emit('callUser', {
+                        userToCall: data.from,
+                        signalData: event.candidate,
+                        from: socket.id
+                    });
+                }
+            };
+        });
+
+        // Listen for hangup events
+        socket.on('callEnded', () => {
+            remoteVideo.srcObject = null;
+            peerConnection.close();
+        });
+
+        // Additional handlers for call acceptance and rejection can be added here
+    </script>
+</body>
+</html>

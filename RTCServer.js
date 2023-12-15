@@ -1,115 +1,95 @@
-const io = require('socket.io')(8000, {
-	cors: {
-		origin: "https://chatjsrctclient.itamarorenn.com", // was "*"
-	}
+const express = require('express');
+const http = require('http');
+const socketIo = require('socket.io');
+
+// Initialize Express and HTTP server
+const app = express();
+const server = http.createServer(app);
+
+const io = require('socket.io')(server, {
+    cors: {
+        origin: "*" // "https://chatjsrctclient.itamarorenn.com",
+    }
 });
 
-
-function temp() {
-	try {
-		/*
-		const response = await require('axios').get('https://api.namefake.com/');
-
-		if (response.status === 200) {
-			const data = response.data;
-			//   console.log(data);
-
-			//TODO replace uid with either the userID or the session token
-			return { name: data.name, fakeProfileURL: data.url }; //, uid: require('crypto').randomUUID()
-		} else {
-			console.error('Failed to fetch data from the API.');
-			return null;
-		}
-		*/
-		const names = [
-			"Alice", "Bob", "Charlie", "David", "Eve", "Frank", "Grace", "Hannah", "Isaac", "Jane",
-			"Kevin", "Linda", "Mike", "Nancy", "Oliver", "Patricia", "Quincy", "Rachel", "Sam", "Tina",
-			"Ursula", "Victor", "Wendy", "Xavier", "Yvonne", "Zane",
-			"Alex", "Beth", "Cameron", "Daisy", "Ethan", "Fiona", "George", "Holly", "Ivy", "Jack",
-			"Katie", "Leo", "Megan", "Nina", "Oscar", "Penny", "Quinn", "Riley", "Sophia", "Tyler"
-		];
-
-		return { name: names[Math.floor(Math.random() * names.length)], fakeProfileURL: "" };
-	}
-	catch (error) {
-		console.error('An error occurred:', error);
-	}
-}
-
-// stand-in for database?
 const users = new Map();
 const socketsToUsers = {};
 
+io.on('connection', socket => {
+    console.log('A user connected with ID:', socket.id);
 
-io.on('connection', async (socket) => {
-	// console.log('A user connected with ID:', socket.id);
-	socket.emit('connection');
+    socket.on('establishConnection', data => {
+        if (data && data.uid) {
+            users.set(data.uid, { socketid: socket.id });
+            socketsToUsers[socket.id] = data.uid;
+            socket.emit('yourData', { uid: data.uid });
+            io.sockets.emit('allUsers', Array.from(users.keys()));
+        }
+    });
 
-	//TODO replace this with either the userID or the session token
-	socket.on('establishConnection', async (data) => {
-		console.log(data.uid, users, data.uid in users)
+    socket.on('disconnect', () => {
+        const uid = socketsToUsers[socket.id];
+        users.delete(uid);
+        delete socketsToUsers[socket.id];
+        io.sockets.emit('userDisconnected', uid);
+    });
 
-		if (data && data.uid && data.uid in users) {
-			// maybe just ignore incoming connection intead
-			users[data.uid]['socketid'] = socket.id;
-			socketsToUsers[socket.id] = data.uid;
-		} else {
-			const uObj = temp();
-			if (!uObj) return console.log("RANDOM NAME GENERATOR ERROR");
-			console.log(data.uid);
+    socket.on('callUser', data => {
+        const userToCall = users.get(data.userToCall);
+        if (userToCall) {
+            io.to(userToCall.socketid).emit('callMade', {
+                signal: data.signalData,
+                from: data.from
+            });
+        }
+    });
 
-			const uid = (data && data.uid) ? data.uid : uObj.uid;
+    socket.on('acceptCall', data => {
+        const userToCall = users.get(data.to);
+        if (userToCall) {
+            io.to(userToCall.socketid).emit('callAccepted', {
+                signal: data.signal,
+                from: socket.id
+            });
+        }
+    });
 
-			users[uid] = uObj;
-			users[uid]['socketid'] = socket.id;
-			// console.log(users);
+    socket.on('rejectCall', data => {
+        const userToCall = users.get(data.to);
+        if (userToCall) {
+            io.to(userToCall.socketid).emit('callRejected', {
+                from: socket.id
+            });
+        }
+    });
 
-			socket.emit('yourData', users[uid]);
-			io.sockets.emit('allUsers', users);
-			socketsToUsers[socket.id] = uid;
-		}
-	});
+    socket.on('endCall', data => {
+        const userToCall = users.get(data.to);
+        if (userToCall) {
+            io.to(userToCall.socketid).emit('callEnded', {
+                from: socket.id
+            });
+        }
+    });
 
-	socket.on('disconnect', () => {
-		const uid = socketsToUsers[socket.id];
-		const toSend = users[uid];
+    // Handle WebRTC ICE candidate event
+    socket.on('sendIceCandidate', data => {
+        const userToCall = users.get(data.to);
+        if (userToCall) {
+            io.to(userToCall.socketid).emit('iceCandidateReceived', {
+                candidate: data.candidate,
+                from: socket.id
+            });
+        }
+    });
+});
 
-		delete users[uid];
-		delete socketsToUsers[socket.id];
 
-		io.sockets.emit('userDisconnected', toSend);
-	});
+app.get('/', (req, res) => {
+    res.sendFile(__dirname + '/clientTemp/index.html'); // Make sure to place 'index.html' in the correct directory
+});
 
-	socket.on('callUser', (data) => {
-		// console.log("CALLING USER");
-		// console.log("TO:", data.userToCall);
-		// console.log("FROM:", data);
-		// console.log(users[data.from]);
-
-		// MAYBE CHANGE THIS
-		const uConf = users[data.from];
-		const uToCall = users[data.userToCall];
-		if (!uToCall) return;
-
-		io.to(uToCall['socketid']).emit('callUser', { signal: data.signalData, from: uConf });
-	});
-
-	socket.on('acceptCall', (data) => {
-		io.to(data.to).emit('callAccepted', data.signal);
-	});
-
-	socket.on('connAlrExists', (data) => {
-		if (!data.socketId in users) return io.to(data.socketId).emit("RESET");
-
-		delete users[data.socketId];
-	});
-
-	socket.on('rejectCall', data => {
-		io.to(data.to).emit('callRejected');
-	});
-
-	socket.on('endCall', data => {
-		io.to(data.to).emit('callEnded');
-	});
-
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on port ${PORT}`);
 });
