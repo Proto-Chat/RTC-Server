@@ -1,6 +1,6 @@
 const io = require('socket.io')(8000, {
 	cors: {
-		origin: "*", // Allow all origins for simplicity (not recommended for production)
+		origin: "https://chatjsrctclient.itamarorenn.com", // was "*"
 	}
 });
 
